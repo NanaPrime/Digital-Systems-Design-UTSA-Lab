@@ -1,0 +1,146 @@
+`timescale 1ns / 1ps
+//////////////////////////////////////////////////////////////////////////////////
+// Company: EE3563 Digital Systems Design
+// Engineer: Hannah Huron
+//
+// Lab 9 - 4-bit Comparator (final version)
+// Layout:
+//   an[0] → rightmost  (shows B)
+//   an[1] → 2nd from right (shows A)
+//   an[7] → leftmost  (shows result: G / E / L)
+//   an[2]-an[6] → off
+//////////////////////////////////////////////////////////////////////////////////
+
+
+// 1-bit Comparator
+
+module comp_1bit (
+    input  wire A, B,
+    input  wire GTin, LTin,
+    output wire GTout, LTout
+);
+    assign GTout = (A & ~B) | ((A ~^ B) & GTin);
+    assign LTout = (~A & B) | ((A ~^ B) & LTin);
+endmodule
+
+
+// Clock Divider (for 7-segment refresh)
+
+module clock_divider #(parameter DIVIDER = 50000)(
+    input  wire clk_in,
+    output reg  slow_clk = 0
+);
+    integer count = 0;
+    always @(posedge clk_in) begin
+        if (count >= DIVIDER) begin
+            count <= 0;
+            slow_clk <= ~slow_clk;
+        end else
+            count <= count + 1;
+    end
+endmodule
+
+
+// Top-Level 4-bit Comparator
+
+module Lab9_Comparator (
+    input  wire [7:0] sw,   // SW7-SW0
+    input  wire clk,        // 100 MHz clock
+    output wire [10:0] led, // LEDs: [7:0]=A,B; [10:8]=GT,EQ,LT
+    output reg  [6:0] seg,  // 7-seg cathodes
+    output reg  [7:0] an    // 7-seg anodes (active low)
+);
+    
+    wire [3:0] A = sw[7:4];
+    wire [3:0] B = sw[3:0];
+    assign led[7:0] = sw;
+
+   
+    wire GT3, GT2, GT1, GT0;
+    wire LT3, LT2, LT1, LT0;
+
+    comp_1bit u3 (.A(A[3]), .B(B[3]), .GTin(1'b0), .LTin(1'b0), .GTout(GT3), .LTout(LT3));
+    comp_1bit u2 (.A(A[2]), .B(B[2]), .GTin(GT3), .LTin(LT3), .GTout(GT2), .LTout(LT2));
+    comp_1bit u1 (.A(A[1]), .B(B[1]), .GTin(GT2), .LTin(LT2), .GTout(GT1), .LTout(LT1));
+    comp_1bit u0 (.A(A[0]), .B(B[0]), .GTin(GT1), .LTin(LT1), .GTout(GT0), .LTout(LT0));
+
+    wire GT = GT0;
+    wire LT = LT0;
+    wire EQ = ~(GT | LT);
+    assign led[10:8] = {GT, EQ, LT};
+
+    
+    // Clock divider for multiplexing
+    
+    wire refresh_clk;
+    clock_divider #(50000) div_inst (.clk_in(clk), .slow_clk(refresh_clk));
+
+    reg [1:0] mux_sel = 0;
+    always @(posedge refresh_clk)
+        mux_sel <= mux_sel + 1;
+
+    
+    // 7-segment HEX decoder
+    
+    function [6:0] seg_decode;
+        input [3:0] val;
+        begin
+            case (val)
+                4'h0: seg_decode = 7'b1000000;
+                4'h1: seg_decode = 7'b1111001;
+                4'h2: seg_decode = 7'b0100100;
+                4'h3: seg_decode = 7'b0110000;
+                4'h4: seg_decode = 7'b0011001;
+                4'h5: seg_decode = 7'b0010010;
+                4'h6: seg_decode = 7'b0000010;
+                4'h7: seg_decode = 7'b1111000;
+                4'h8: seg_decode = 7'b0000000;
+                4'h9: seg_decode = 7'b0010000;
+                4'hA: seg_decode = 7'b0001000;
+                4'hB: seg_decode = 7'b0000011;
+                4'hC: seg_decode = 7'b1000110;
+                4'hD: seg_decode = 7'b0100001;
+                4'hE: seg_decode = 7'b0000110;
+                4'hF: seg_decode = 7'b0001110;
+                default: seg_decode = 7'b1111111;
+            endcase
+        end
+    endfunction
+
+    
+    // Letters G, E, L
+   
+    reg [6:0] seg_res;
+    always @(*) begin
+        if (GT) seg_res = 7'b0000010;      // G
+        else if (EQ) seg_res = 7'b0000110; // E
+        else seg_res = 7'b1000111;         // L
+    end
+
+   
+    // Display Multiplexing
+    // an[0] = B (rightmost)
+    // an[1] = A (2nd right)
+    // an[7] = Result (leftmost)
+   
+    always @(*) begin
+        an = 8'b11111111; // all off
+        case (mux_sel)
+            2'b00: begin
+                an[0] = 1'b0; // rightmost → B
+                seg = seg_decode(B);
+            end
+            2'b01: begin
+                an[1] = 1'b0; // next → A
+                seg = seg_decode(A);
+            end
+            2'b10: begin
+                an[7] = 1'b0; // leftmost → G/E/L
+                seg = seg_res;
+            end
+            default: begin
+                seg = 7'b1111111;
+            end
+        endcase
+    end
+endmodule
